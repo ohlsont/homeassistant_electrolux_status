@@ -16,7 +16,7 @@ from homeassistant.const import Platform, UnitOfTemperature
 
 from .binary_sensor import ElectroluxBinarySensor
 from .button import ElectroluxButton
-from .catalog_core import CATALOG_BASE, CATALOG_MODEL
+from .catalog_core import CATALOG_APPLIANCE_TYPE, CATALOG_BASE, CATALOG_MODEL
 from .const import (
     ATTRIBUTES_BLACKLIST,
     ATTRIBUTES_WHITELIST,
@@ -51,6 +51,29 @@ def deep_merge_dicts(dict1, dict2):
         else:
             result[key] = value
     return result
+
+
+# Matches the numeric suffix of a capability container, e.g. the "1" of
+# "hobZone1/runningTime". Appliances that report a variable number of identical
+# containers (hob zones, heating modules) can then be described once in a
+# catalog as "hobZone*/runningTime" instead of per index.
+CONTAINER_INDEX_RE = re.compile(r"^([A-Za-z]+?)\d+/")
+
+# Catalog keys using the wildcard above are patterns, never real capabilities.
+CATALOG_WILDCARD = "*"
+
+
+def catalog_wildcard_key(capability: str) -> str | None:
+    """Return the wildcard form of a nested capability path, or None.
+
+    "hobZone12/runningTime" -> "hobZone*/runningTime"
+    "userSelections/analogTemperature" -> None (no numeric container suffix)
+    """
+    match = CONTAINER_INDEX_RE.match(capability)
+    if not match:
+        return None
+    attribute = capability.split("/", 1)[1]
+    return f"{match.group(1)}{CATALOG_WILDCARD}/{attribute}"
 
 
 class ElectroluxLibraryEntity:
@@ -342,6 +365,7 @@ class Appliance:
         """Initiate the appliance."""
         self.own_capabilties = False
         self.data = None
+        self._catalog: dict[str, ElectroluxDevice] | None = None
         self.coordinator = coordinator
         self.model = model
         self.pnc_id = pnc_id
@@ -367,22 +391,51 @@ class Appliance:
 
     @property
     def catalog(self) -> dict[str, ElectroluxDevice]:
-        """Return the defined catalog for the appliance."""
-        # TODO: Use appliance_type as opposed to model?
-        if self.model in CATALOG_MODEL:
-            _LOGGER.debug("Extending catalog for %s", self.model)
-            # Make a deep copy of the base catalog to preserve it
-            new_catalog = copy.deepcopy(CATALOG_BASE)
+        """Return the defined catalog for the appliance.
 
-            # Get the specific model's extended catalog
-            model_catalog = CATALOG_MODEL[self.model]
+        Layered from most generic to most specific: the base catalog, then any
+        overrides for the reported appliance type, then any overrides for the
+        exact model. Appliance-type overrides are preferred over model ones as
+        they apply to every model of that type.
+        """
+        if self._catalog is not None:
+            return self._catalog
 
-            # Update the existing catalog with the extended information for this model
-            for key, device in model_catalog.items():
-                new_catalog[key] = device
+        overrides = [
+            CATALOG_APPLIANCE_TYPE.get(self.appliance_type),
+            CATALOG_MODEL.get(self.model),
+        ]
+        if not any(overrides):
+            self._catalog = CATALOG_BASE
+            return self._catalog
 
-            return new_catalog
-        return CATALOG_BASE
+        _LOGGER.debug(
+            "Extending catalog for appliance type %s / model %s",
+            self.appliance_type,
+            self.model,
+        )
+        # Make a deep copy of the base catalog to preserve it
+        new_catalog = copy.deepcopy(CATALOG_BASE)
+        for override in overrides:
+            if override:
+                new_catalog.update(override)
+
+        self._catalog = new_catalog
+        return self._catalog
+
+    def get_catalog_entry(self, capability: str) -> ElectroluxDevice | None:
+        """Return the catalog entry describing a capability path.
+
+        Falls back to the wildcard form of the path so a catalog can describe
+        repeated containers without assuming how many of them an appliance
+        reports, or that they are numbered contiguously.
+        """
+        catalog = self.catalog
+        if entry := catalog.get(capability):
+            return entry
+        if wildcard := catalog_wildcard_key(capability):
+            return catalog.get(wildcard)
+        return None
 
     def update_missing_entities(self) -> None:
         """Add missing entities when no capabilities returned by the API.
@@ -393,6 +446,9 @@ class Appliance:
             return
 
         for key, catalog_item in self.catalog.items():
+            if CATALOG_WILDCARD in key:
+                # Pattern entry, not a capability an appliance can report.
+                continue
             category = self.data.get_category(key)
             if (
                 category
@@ -447,7 +503,7 @@ class Appliance:
         display_name = self.data.get_sensor_name(capability)
 
         # get the item definition from the catalog
-        catalog_item = self.catalog.get(capability, None)
+        catalog_item = self.get_catalog_entry(capability)
         if catalog_item:
             if capability_info is None:
                 capability_info = catalog_item.capability_info
@@ -598,7 +654,16 @@ class Appliance:
             # attr not found in state, next attr
             if self.get_state(static_attribute) is None:
                 continue
-            if catalog_item := self.catalog.get(static_attribute, None):
+            if capabilities_names and static_attribute in capabilities_names:
+                # The appliance does advertise it after all, so let the
+                # capability document drive it rather than creating a second,
+                # duplicate entity with the same unique id.
+                _LOGGER.debug(
+                    "Electrolux static_attribute %s also advertised as a capability, skipping",
+                    static_attribute,
+                )
+                continue
+            if catalog_item := self.get_catalog_entry(static_attribute):
                 if (entity := self.get_entity(static_attribute)) is None:
                     # catalog definition and automatic checks fail to determine type
                     _LOGGER.debug("Electrolux static_attribute undefined %s", static_attribute)

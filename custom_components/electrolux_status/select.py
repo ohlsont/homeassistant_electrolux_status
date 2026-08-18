@@ -76,13 +76,17 @@ class ElectroluxSelect(ElectroluxEntity, SelectEntity):
         )
         values_dict: dict[str, Any] | None = self.capability.get("values", None)
         self.options_list: dict[str, str] = {}
+        # Values the appliance can report but refuses to be set to. They are
+        # kept out of the selectable options while still being displayable,
+        # e.g. a hob hood reports hobToHoodState AUTO_SUSPEND but marks it
+        # disabled in its capability document.
+        self.readonly_options: set[str] = set()
         for value in values_dict:
             entry: dict[str, Any] = values_dict[value]
-            if "disabled" in entry:
-                continue
-
             label = self.format_label(value)
             self.options_list[label] = value
+            if "disabled" in entry:
+                self.readonly_options.add(label)
 
     @property
     def entity_domain(self):
@@ -132,10 +136,12 @@ class ElectroluxSelect(ElectroluxEntity, SelectEntity):
                 self.options_list.values(),
                 ex,
             )
-        # When value not in the catalog -> add the value to the list then
+        # When value not in the catalog -> add the value for display only.
+        # It was not advertised as settable, so do not make it selectable.
         if label is None:
             label = self.format_label(value)
             self.options_list[label] = value
+            self.readonly_options.add(label)
         if label is not None:
             self._cached_value = label
         else:
@@ -144,6 +150,13 @@ class ElectroluxSelect(ElectroluxEntity, SelectEntity):
 
     async def async_select_option(self, option: str) -> None:
         """Change the selected option."""
+        if option in self.readonly_options:
+            _LOGGER.warning(
+                "Electrolux %s cannot be set to %s: the appliance reports that value as disabled",
+                self.json_path,
+                option,
+            )
+            return
         value = self.options_list.get(option, None)
         if (
             isinstance(self.unit, UnitOfTemperature)
@@ -182,5 +195,10 @@ class ElectroluxSelect(ElectroluxEntity, SelectEntity):
 
     @property
     def options(self) -> list[str]:
-        """Return a set of selectable options."""
-        return list(self.options_list.keys())
+        """Return a set of selectable options.
+
+        Excludes values the capability document marks as disabled. The current
+        option may still report one of those, which is the honest reading of an
+        appliance that enters a state it will not let you select.
+        """
+        return [label for label in self.options_list if label not in self.readonly_options]

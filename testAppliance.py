@@ -1,33 +1,69 @@
+"""Dump the raw Electrolux API payloads for every appliance on an account.
+
+Useful when adding support for a new appliance: the capability document it
+prints is the source of truth the integration builds entities from.
+
+    ELECTROLUX_USERNAME=you@example.com \
+    ELECTROLUX_PASSWORD=secret \
+    ELECTROLUX_COUNTRY=se \
+    python testAppliance.py [output_directory]
+
+With an output directory, one JSON file per appliance is written there instead
+of everything going to stdout. Payloads contain the appliance id, PNC and
+serial number, so sanitize them before attaching them to an issue or a PR.
+"""
+
 import asyncio
 import json
+import os
+import sys
+
 from pyelectroluxocp import OneAppApi
-import re
 
-# Fill in your username and password here :
-login="xxx"
-password="xxx"
 
-async def main():
-    async with OneAppApi(login, password) as client:
+async def main() -> None:
+    """Fetch and dump list, info, state and capabilities per appliance."""
+    username = os.environ.get("ELECTROLUX_USERNAME")
+    password = os.environ.get("ELECTROLUX_PASSWORD")
+    country = os.environ.get("ELECTROLUX_COUNTRY", "us")
+    if not username or not password:
+        sys.exit("Set ELECTROLUX_USERNAME and ELECTROLUX_PASSWORD")
+
+    output_dir = sys.argv[1] if len(sys.argv) > 1 else None
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+
+    async with OneAppApi(username, password, country) as client:
         appliances = await client.get_appliances_list()
-        print("get_appliances_list :\n",json.dumps(appliances, indent=2))
+        print(f"Found {len(appliances)} appliance(s)", file=sys.stderr)
 
-        info = await client.get_appliance_status(appliances[0].get("applianceId"))
-        json_object = json.dumps(info, indent=2)
-        print("get_appliance_status :\n", json_object)
+        for appliance in appliances:
+            appliance_id = appliance.get("applianceId")
+            model_name = (appliance.get("applianceData") or {}).get("modelName", "unknown")
+            print(f"== {model_name} {appliance_id}", file=sys.stderr)
 
-        info = await client.get_appliance_capabilities(appliances[0].get("applianceId"))
-        json_object = json.dumps(info, indent=2)
-        print("get_appliance_capabilities :\n", json_object)
+            bundle = {"get_appliances_list": appliance}
+            for name, call in (
+                ("get_appliances_info", lambda: client.get_appliances_info([appliance_id])),
+                ("get_appliance_state", lambda: client.get_appliance_state(appliance_id)),
+                ("get_appliance_capabilities", lambda: client.get_appliance_capabilities(appliance_id)),
+            ):
+                try:
+                    bundle[name] = await call()
+                except Exception as err:  # noqa: BLE001
+                    # Some appliances (robot vacuums for instance) have no
+                    # capability document; keep going so the rest is usable.
+                    print(f"   {name}: {type(err).__name__}: {err}", file=sys.stderr)
+                    bundle[name] = {"error": f"{type(err).__name__}: {err}"}
 
-        # Writing to sample.json
-        # with open("results.json", "w") as outfile:
-        #     outfile.write(json_object)
-        #
-        # def state_update_callback(a):
-        #     print("appliance state updated", json.dumps((a)))
-        # await client.watch_for_appliance_state_updates([appliances[0].get("applianceId")], state_update_callback)
+            if output_dir:
+                safe_name = "".join(c if c.isalnum() else "_" for c in str(model_name))
+                path = os.path.join(output_dir, f"{safe_name}.json")
+                with open(path, "w", encoding="utf-8") as handle:
+                    json.dump(bundle, handle, indent=2, sort_keys=True)
+                print(f"   written to {path}", file=sys.stderr)
+            else:
+                print(json.dumps(bundle, indent=2, sort_keys=True))
 
-        #await asyncio.sleep(100)
 
 asyncio.run(main())
