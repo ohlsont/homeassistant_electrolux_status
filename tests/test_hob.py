@@ -248,6 +248,34 @@ def test_undocumented_reported_value_stays_selectable(hob) -> None:
     assert "Drying Cycle" not in fan_speed.readonly_options
 
 
+def test_zero_is_a_value_not_a_missing_reading(hob) -> None:
+    """A number reporting 0 renders 0, not unknown.
+
+    The extractor run-on duration reports 0 and declares a default of 0, which
+    used to fall through to an empty cache and leave the entity unknown.
+    """
+    duration = entity_by_path(hob, "hobHood/targetDuration")
+    assert duration.capability["default"] == 0
+    assert hob.get_state("hobHood/targetDuration") == 0
+    assert duration.native_value == 0
+
+
+def test_duration_number_is_presented_in_minutes(hob) -> None:
+    """Seconds-based numbers are scaled to whole minutes, both ways.
+
+    ElectroluxNumber converts a seconds unit to minutes for display and back
+    for writing, so declaring the unit changes the control's scale.
+    """
+    duration = entity_by_path(hob, "hobHood/targetDuration")
+    assert duration.native_unit_of_measurement == UnitOfTime.MINUTES
+    assert duration.native_min_value == 0
+    assert duration.native_max_value == 99
+    assert duration.native_step == 1
+
+    hob.update_reported_data({"hobHood": {"targetDuration": 3600}})
+    assert duration.native_value == 60
+
+
 def test_number_bounds_come_from_capabilities(hob) -> None:
     """Numeric bounds are taken from the capability document."""
     duration = entity_by_path(hob, "hobHood/targetDuration")
