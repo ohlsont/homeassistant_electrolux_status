@@ -10,6 +10,7 @@ from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory, Platform, UnitOfTemperature
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN, SELECT
@@ -112,19 +113,29 @@ class ElectroluxSelect(ElectroluxEntity, SelectEntity):
     #         return "mdi:XXX"
     #     return "mdi:YYY"
 
-    @property
-    def current_option(self) -> str:
-        """Return the current option."""
+    def reported_value(self) -> Any:
+        """Return the reported value with any catalog mapping applied.
+
+        Shared by current_option and options so the two cannot disagree about
+        which option the appliance is currently reporting.
+        """
         value = self.extract_value()
-
         if value is None:
-            return self._cached_value
-
+            return None
         if self.catalog_entry and self.catalog_entry.value_mapping:
             mapping = self.catalog_entry.value_mapping
             _LOGGER.debug("Mapping %s: %s to %s", self.json_path, value, mapping)
             if value in mapping:
                 value = mapping.get(value, value)
+        return value
+
+    @property
+    def current_option(self) -> str:
+        """Return the current option."""
+        value = self.reported_value()
+
+        if value is None:
+            return self._cached_value
 
         label = None
         try:
@@ -136,12 +147,13 @@ class ElectroluxSelect(ElectroluxEntity, SelectEntity):
                 self.options_list.values(),
                 ex,
             )
-        # When value not in the catalog -> add the value for display only.
-        # It was not advertised as settable, so do not make it selectable.
+        # Electrolux capability documents omit values that appliances really
+        # do report, which is why this fallback exists. Learn the value and
+        # leave it selectable - only values the document explicitly flags as
+        # disabled are withheld.
         if label is None:
             label = self.format_label(value)
             self.options_list[label] = value
-            self.readonly_options.add(label)
         if label is not None:
             self._cached_value = label
         else:
@@ -151,12 +163,11 @@ class ElectroluxSelect(ElectroluxEntity, SelectEntity):
     async def async_select_option(self, option: str) -> None:
         """Change the selected option."""
         if option in self.readonly_options:
-            _LOGGER.warning(
-                "Electrolux %s cannot be set to %s: the appliance reports that value as disabled",
-                self.json_path,
-                option,
+            # Reachable from a script: the value is in options while the
+            # appliance reports it, so HA's own validation lets it through.
+            raise ServiceValidationError(
+                f"{self.name} cannot be set to {option}: the appliance reports that value as disabled"
             )
-            return
         value = self.options_list.get(option, None)
         if (
             isinstance(self.unit, UnitOfTemperature)
@@ -206,7 +217,7 @@ class ElectroluxSelect(ElectroluxEntity, SelectEntity):
         refused by async_select_option, so it can be seen but never chosen.
         """
         selectable = [label for label in self.options_list if label not in self.readonly_options]
-        value = self.extract_value()
+        value = self.reported_value()
         for label in self.readonly_options:
             if self.options_list.get(label) == value and label not in selectable:
                 selectable.append(label)

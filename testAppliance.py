@@ -43,10 +43,12 @@ async def main() -> None:
             print(f"== {model_name} {appliance_id}", file=sys.stderr)
 
             bundle = {"get_appliances_list": appliance}
+            # aid is bound as a default so each lambda captures this
+            # iteration's appliance, not the loop variable.
             for name, call in (
-                ("get_appliances_info", lambda: client.get_appliances_info([appliance_id])),
-                ("get_appliance_state", lambda: client.get_appliance_state(appliance_id)),
-                ("get_appliance_capabilities", lambda: client.get_appliance_capabilities(appliance_id)),
+                ("get_appliances_info", lambda aid=appliance_id: client.get_appliances_info([aid])),
+                ("get_appliance_state", lambda aid=appliance_id: client.get_appliance_state(aid)),
+                ("get_appliance_capabilities", lambda aid=appliance_id: client.get_appliance_capabilities(aid)),
             ):
                 try:
                     bundle[name] = await call()
@@ -57,7 +59,10 @@ async def main() -> None:
                     bundle[name] = {"error": f"{type(err).__name__}: {err}"}
 
             if output_dir:
-                safe_name = "".join(c if c.isalnum() else "_" for c in str(model_name))
+                # modelName carries the appliance *type* (HB, WM, CR), so it
+                # is not unique on an account with two appliances of a kind.
+                # The appliance id is.
+                safe_name = "".join(c if c.isalnum() else "_" for c in f"{model_name}_{appliance_id}")
                 path = os.path.join(output_dir, f"{safe_name}.json")
                 with open(path, "w", encoding="utf-8") as handle:
                     json.dump(bundle, handle, indent=2, sort_keys=True)

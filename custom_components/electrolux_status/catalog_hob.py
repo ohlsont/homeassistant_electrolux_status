@@ -6,7 +6,10 @@ capability exists at all, its access mode, its enum values and its numeric
 bounds all remain owned by the capability document returned by the API.
 
 Keys may use a ``*`` wildcard in place of the numeric suffix of a container,
-e.g. ``hobZone*/runningTime``. Hobs report a variable and non-contiguous set of
+e.g. ``hobZone*/runningTime``. Such an entry describes every container of its
+kind, so its ``friendly_name`` must carry the ``{index}`` placeholder - it is
+replaced with the container's number, otherwise every zone would present the
+same name to the UI, to search and to voice assistants. Hobs report a variable and non-contiguous set of
 zones (the AEG CCE84779CB reports hobZone1-4 plus hobZone7-8 for its bridged
 zones), so entries must never be written against a fixed zone count.
 """
@@ -120,13 +123,13 @@ HB: dict[str, ElectroluxDevice] = {
     # Cooking zones. Wildcard keys, one entity per zone the device reports.
     #
     "hobZone*/heatingQualitativeLevel": ElectroluxDevice(
-        friendly_name="Power level",
+        friendly_name="Zone {index} power level",
         # Deliberately read-only. See MODULE NOTE at the bottom of this file.
         entity_icon="mdi:stove",
         entity_platform=Platform.SENSOR,
     ),
     "hobZone*/hobPotDetected": ElectroluxDevice(
-        friendly_name="Pot detection",
+        friendly_name="Zone {index} pot detection",
         # Kept as a four-state enum sensor rather than a binary sensor:
         # NO_POT_IDLE / NO_POT_RUNNING / POT_IDLE / POT_RUNNING carries both
         # pot presence and whether the zone is running, which a binary sensor
@@ -134,23 +137,23 @@ HB: dict[str, ElectroluxDevice] = {
         entity_icon="mdi:pot-steam",
     ),
     "hobZone*/residualHeatState": ElectroluxDevice(
-        friendly_name="Residual heat",
+        friendly_name="Zone {index} residual heat",
         entity_icon="mdi:heat-wave",
     ),
     "hobZone*/runningTime": ElectroluxDevice(
-        friendly_name="Running time",
+        friendly_name="Zone {index} running time",
         device_class=SensorDeviceClass.DURATION,
         unit=UnitOfTime.SECONDS,
         entity_icon="mdi:timelapse",
     ),
     "hobZone*/timeToEnd": ElectroluxDevice(
-        friendly_name="Time to end",
+        friendly_name="Zone {index} time to end",
         device_class=SensorDeviceClass.DURATION,
         unit=UnitOfTime.SECONDS,
         entity_icon="mdi:timer-sand",
     ),
     "hobZone*/targetDuration": ElectroluxDevice(
-        friendly_name="Target duration",
+        friendly_name="Zone {index} target duration",
         device_class=SensorDeviceClass.DURATION,
         unit=UnitOfTime.SECONDS,
         entity_icon="mdi:timer-cog",
@@ -158,7 +161,7 @@ HB: dict[str, ElectroluxDevice] = {
         entity_platform=Platform.SENSOR,
     ),
     "hobZone*/reminderTime": ElectroluxDevice(
-        friendly_name="Reminder time",
+        friendly_name="Zone {index} reminder time",
         device_class=SensorDeviceClass.DURATION,
         unit=UnitOfTime.SECONDS,
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -166,13 +169,13 @@ HB: dict[str, ElectroluxDevice] = {
         entity_platform=Platform.SENSOR,
     ),
     "hobZone*/hobMaxPowerLevel": ElectroluxDevice(
-        friendly_name="Max power level",
+        friendly_name="Zone {index} max power level",
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_icon="mdi:speedometer",
         entity_registry_enabled_default=False,
     ),
     "hobZone*/hobCoil": ElectroluxDevice(
-        friendly_name="Coil",
+        friendly_name="Zone {index} coil",
         # Declared as a number by the capability document but reported as an
         # empty object by the appliance, so it has no displayable value.
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -183,34 +186,34 @@ HB: dict[str, ElectroluxDevice] = {
     # Heating modules (flexible/bridge zones)
     #
     "hobModule*/heatingModuleType": ElectroluxDevice(
-        friendly_name="Heating module type",
+        friendly_name="Module {index} heating module type",
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_icon="mdi:chip",
         entity_registry_enabled_default=False,
     ),
     "hobModule*/hobFrontZone": ElectroluxDevice(
-        friendly_name="Front zone",
+        friendly_name="Module {index} front zone",
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_icon="mdi:square-rounded",
     ),
     "hobModule*/hobMiddleZone": ElectroluxDevice(
-        friendly_name="Middle zone",
+        friendly_name="Module {index} middle zone",
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_icon="mdi:square-rounded",
     ),
     "hobModule*/hobRearZone": ElectroluxDevice(
-        friendly_name="Rear zone",
+        friendly_name="Module {index} rear zone",
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_icon="mdi:square-rounded",
     ),
     "hobModule*/procookLevelFront": ElectroluxDevice(
-        friendly_name="ProCook level front",
+        friendly_name="Module {index} ProCook level front",
         # Read-only: see MODULE NOTE.
         entity_icon="mdi:stove",
         entity_platform=Platform.SENSOR,
     ),
     "hobModule*/procookLevelRear": ElectroluxDevice(
-        friendly_name="ProCook level rear",
+        friendly_name="Module {index} ProCook level rear",
         entity_icon="mdi:stove",
         entity_platform=Platform.SENSOR,
     ),

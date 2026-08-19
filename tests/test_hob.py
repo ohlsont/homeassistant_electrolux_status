@@ -9,6 +9,7 @@ import pytest
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass
 from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.const import Platform, UnitOfTime
+from homeassistant.exceptions import ServiceValidationError
 
 from custom_components.electrolux_status.api import catalog_wildcard_key
 from custom_components.electrolux_status.catalog_core import CATALOG_APPLIANCE_TYPE
@@ -123,7 +124,30 @@ def test_wildcard_catalog_entry_applies_to_every_zone(hob) -> None:
         entity = entity_by_path(hob, f"{zone}/runningTime")
         assert entity.device_class is SensorDeviceClass.DURATION
         assert entity.unit == UnitOfTime.SECONDS
-        assert entity.name == "Running time"
+
+
+def test_wildcard_names_carry_the_container_index(hob) -> None:
+    """A wildcard entry must not give every container the same name.
+
+    has_entity_name composes the device name with this one, so six zones all
+    called "Running time" are indistinguishable in the UI, in search and to
+    voice assistants.
+    """
+    assert entity_by_path(hob, "hobZone1/runningTime").name == "Zone 1 running time"
+    assert entity_by_path(hob, "hobZone7/runningTime").name == "Zone 7 running time"
+    assert entity_by_path(hob, "hobModule2/hobFrontZone").name == "Module 2 front zone"
+
+
+def test_entity_names_are_unique(hob) -> None:
+    """No two entities on the appliance present the same name."""
+    names = [entity.name for entity in hob.entities]
+    duplicates = {name for name in names if names.count(name) > 1}
+    assert not duplicates
+
+
+def test_index_placeholder_does_not_leak(hob) -> None:
+    """Every wildcard name is resolved, never shown raw."""
+    assert not [entity for entity in hob.entities if "{index}" in (entity.name or "")]
 
 
 def test_wildcard_keys_do_not_become_entities(hob) -> None:
@@ -188,7 +212,7 @@ def test_disabled_value_stays_visible_while_reported(hob) -> None:
 
 
 def test_disabled_value_cannot_be_sent(hob) -> None:
-    """Selecting a disabled value never reaches the appliance."""
+    """Selecting a disabled value is refused loudly, not silently dropped."""
     hood_state = entity_by_path(hob, "hobHood/hobToHoodState")
     hob.update_reported_data({"hobHood": {"hobToHoodState": "AUTO_SUSPEND"}})
     assert "Auto Suspend" in hood_state.options
@@ -201,11 +225,27 @@ def test_disabled_value_cannot_be_sent(hob) -> None:
 
     hood_state.api = RecordingApi()
 
-    asyncio.run(hood_state.async_select_option("Auto Suspend"))
+    with pytest.raises(ServiceValidationError):
+        asyncio.run(hood_state.async_select_option("Auto Suspend"))
     assert sent == []
 
     asyncio.run(hood_state.async_select_option("Manual"))
     assert sent == [(hob.pnc_id, {"hobHood": {"hobToHoodState": "MANUAL"}})]
+
+
+def test_undocumented_reported_value_stays_selectable(hob) -> None:
+    """A value missing from the capability document is learned, not withheld.
+
+    Electrolux capability documents are known to omit values appliances
+    really report; withholding them would remove the user's ability to set a
+    value that was working before.
+    """
+    fan_speed = entity_by_path(hob, "hobHood/hobToHoodFanSpeed")
+    hob.update_reported_data({"hobHood": {"hobToHoodFanSpeed": "DRYING_CYCLE"}})
+
+    assert fan_speed.current_option == "Drying Cycle"
+    assert "Drying Cycle" in fan_speed.options
+    assert "Drying Cycle" not in fan_speed.readonly_options
 
 
 def test_number_bounds_come_from_capabilities(hob) -> None:

@@ -1,6 +1,7 @@
 """API for Electrolux Status."""
 
 import copy
+from dataclasses import replace
 import logging
 import re
 from typing import Any
@@ -57,10 +58,14 @@ def deep_merge_dicts(dict1, dict2):
 # "hobZone1/runningTime". Appliances that report a variable number of identical
 # containers (hob zones, heating modules) can then be described once in a
 # catalog as "hobZone*/runningTime" instead of per index.
-CONTAINER_INDEX_RE = re.compile(r"^([A-Za-z]+?)\d+/")
+CONTAINER_INDEX_RE = re.compile(r"^([A-Za-z]+?)(\d+)/")
 
 # Catalog keys using the wildcard above are patterns, never real capabilities.
 CATALOG_WILDCARD = "*"
+
+# A wildcard entry's friendly_name may carry this placeholder, replaced with
+# the container's index so each zone or module gets a distinguishable name.
+CATALOG_INDEX_PLACEHOLDER = "{index}"
 
 
 def catalog_wildcard_key(capability: str) -> str | None:
@@ -74,6 +79,15 @@ def catalog_wildcard_key(capability: str) -> str | None:
         return None
     attribute = capability.split("/", 1)[1]
     return f"{match.group(1)}{CATALOG_WILDCARD}/{attribute}"
+
+
+def catalog_container_index(capability: str) -> str | None:
+    """Return the index of a numbered capability container, or None.
+
+    "hobZone7/runningTime" -> "7"
+    """
+    match = CONTAINER_INDEX_RE.match(capability)
+    return match.group(2) if match else None
 
 
 class ElectroluxLibraryEntity:
@@ -398,6 +412,10 @@ class Appliance:
         exact model. Appliance-type overrides are preferred over model ones as
         they apply to every model of that type.
         """
+        # Cached for the appliance's lifetime. The appliance type does not
+        # change, and caching also means a later state push that happens to
+        # omit applianceInfo cannot silently switch the catalog out from
+        # under entities that were already built from it.
         if self._catalog is not None:
             return self._catalog
 
@@ -433,9 +451,15 @@ class Appliance:
         catalog = self.catalog
         if entry := catalog.get(capability):
             return entry
-        if wildcard := catalog_wildcard_key(capability):
-            return catalog.get(wildcard)
-        return None
+        wildcard = catalog_wildcard_key(capability)
+        if not wildcard or not (entry := catalog.get(wildcard)):
+            return None
+        # A wildcard entry describes every container of its kind, so its name
+        # has to carry the index or every zone ends up with the same name.
+        index = catalog_container_index(capability)
+        if index and entry.friendly_name and CATALOG_INDEX_PLACEHOLDER in entry.friendly_name:
+            return replace(entry, friendly_name=entry.friendly_name.format(index=index))
+        return entry
 
     def update_missing_entities(self) -> None:
         """Add missing entities when no capabilities returned by the API.
