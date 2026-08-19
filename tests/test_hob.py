@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass
@@ -159,15 +161,51 @@ def test_hood_state_options_come_from_capabilities(hob) -> None:
 
 
 def test_disabled_enum_values_are_not_selectable(hob) -> None:
-    """AUTO_SUSPEND is marked disabled, so it must not be offered.
-
-    The appliance still reports the state, so it stays displayable; it just
-    may not be chosen.
-    """
+    """AUTO_SUSPEND is marked disabled, so it must not be offered."""
     hood_state = entity_by_path(hob, "hobHood/hobToHoodState")
     assert "Auto Suspend" in hood_state.readonly_options
     assert "Auto Suspend" not in hood_state.options
     assert sorted(hood_state.options) == ["Automatic", "Manual"]
+
+
+def test_disabled_value_stays_visible_while_reported(hob) -> None:
+    """A disabled value the appliance reports must not read as unknown.
+
+    Home Assistant drops the state of a select whose current option is not in
+    its option list, so the reported value has to stay in the list while it is
+    current - but it must never become settable.
+    """
+    hood_state = entity_by_path(hob, "hobHood/hobToHoodState")
+    hob.update_reported_data({"hobHood": {"hobToHoodState": "AUTO_SUSPEND"}})
+
+    assert hood_state.current_option == "Auto Suspend"
+    assert "Auto Suspend" in hood_state.options, "state would render as unknown"
+    assert "Auto Suspend" in hood_state.readonly_options
+
+    hob.update_reported_data({"hobHood": {"hobToHoodState": "AUTOMATIC"}})
+    assert hood_state.current_option == "Automatic"
+    assert "Auto Suspend" not in hood_state.options
+
+
+def test_disabled_value_cannot_be_sent(hob) -> None:
+    """Selecting a disabled value never reaches the appliance."""
+    hood_state = entity_by_path(hob, "hobHood/hobToHoodState")
+    hob.update_reported_data({"hobHood": {"hobToHoodState": "AUTO_SUSPEND"}})
+    assert "Auto Suspend" in hood_state.options
+
+    sent = []
+
+    class RecordingApi:
+        async def execute_appliance_command(self, *args):
+            sent.append(args)
+
+    hood_state.api = RecordingApi()
+
+    asyncio.run(hood_state.async_select_option("Auto Suspend"))
+    assert sent == []
+
+    asyncio.run(hood_state.async_select_option("Manual"))
+    assert sent == [(hob.pnc_id, {"hobHood": {"hobToHoodState": "MANUAL"}})]
 
 
 def test_number_bounds_come_from_capabilities(hob) -> None:

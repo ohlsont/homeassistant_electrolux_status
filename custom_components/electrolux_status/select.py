@@ -197,8 +197,17 @@ class ElectroluxSelect(ElectroluxEntity, SelectEntity):
     def options(self) -> list[str]:
         """Return a set of selectable options.
 
-        Excludes values the capability document marks as disabled. The current
-        option may still report one of those, which is the honest reading of an
-        appliance that enters a state it will not let you select.
+        Values the capability document marks as disabled are not offered.
+
+        Home Assistant renders no state at all for a select whose current
+        option is absent from this list, so a disabled value is kept in the
+        list while the appliance is actually reporting it - otherwise a hob
+        sitting in AUTO_SUSPEND would show as "unknown". Sending it is still
+        refused by async_select_option, so it can be seen but never chosen.
         """
-        return [label for label in self.options_list if label not in self.readonly_options]
+        selectable = [label for label in self.options_list if label not in self.readonly_options]
+        value = self.extract_value()
+        for label in self.readonly_options:
+            if self.options_list.get(label) == value and label not in selectable:
+                selectable.append(label)
+        return selectable
