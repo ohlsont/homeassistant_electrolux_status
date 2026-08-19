@@ -82,10 +82,14 @@ class ElectroluxSelect(ElectroluxEntity, SelectEntity):
         # e.g. a hob hood reports hobToHoodState AUTO_SUSPEND but marks it
         # disabled in its capability document.
         self.readonly_options: set[str] = set()
+        # Reverse index, so resolving the reported value to its label is a dict
+        # lookup rather than a scan of every option on each state write.
+        self.label_by_value: dict[Any, str] = {}
         for value in values_dict:
             entry: dict[str, Any] = values_dict[value]
             label = self.format_label(value)
             self.options_list[label] = value
+            self.label_by_value[value] = label
             if "disabled" in entry:
                 self.readonly_options.add(label)
 
@@ -119,15 +123,7 @@ class ElectroluxSelect(ElectroluxEntity, SelectEntity):
         Shared by current_option and options so the two cannot disagree about
         which option the appliance is currently reporting.
         """
-        value = self.extract_value()
-        if value is None:
-            return None
-        if self.catalog_entry and self.catalog_entry.value_mapping:
-            mapping = self.catalog_entry.value_mapping
-            _LOGGER.debug("Mapping %s: %s to %s", self.json_path, value, mapping)
-            if value in mapping:
-                value = mapping.get(value, value)
-        return value
+        return self.apply_value_mapping(self.extract_value())
 
     @property
     def current_option(self) -> str:
@@ -137,27 +133,21 @@ class ElectroluxSelect(ElectroluxEntity, SelectEntity):
         if value is None:
             return self._cached_value
 
-        label = None
-        try:
-            label = list(self.options_list.keys())[list(self.options_list.values()).index(value)]
-        except Exception as ex:  # noqa: BLE001
-            _LOGGER.info(
-                "Electrolux error value %s does not exist in the list %s. %s",
-                value,
-                self.options_list.values(),
-                ex,
-            )
+        label = self.label_by_value.get(value)
         # Electrolux capability documents omit values that appliances really
         # do report, which is why this fallback exists. Learn the value and
         # leave it selectable - only values the document explicitly flags as
         # disabled are withheld.
         if label is None:
+            _LOGGER.info(
+                "Electrolux %s reported %s, which its capabilities do not list; adding it",
+                self.json_path,
+                value,
+            )
             label = self.format_label(value)
             self.options_list[label] = value
-        if label is not None:
-            self._cached_value = label
-        else:
-            label = self._cached_value
+            self.label_by_value[value] = label
+        self._cached_value = label
         return label
 
     async def async_select_option(self, option: str) -> None:
@@ -216,9 +206,11 @@ class ElectroluxSelect(ElectroluxEntity, SelectEntity):
         sitting in AUTO_SUSPEND would show as "unknown". Sending it is still
         refused by async_select_option, so it can be seen but never chosen.
         """
-        selectable = [label for label in self.options_list if label not in self.readonly_options]
+        if not self.readonly_options:
+            return list(self.options_list)
         value = self.reported_value()
-        for label in self.readonly_options:
-            if self.options_list.get(label) == value and label not in selectable:
-                selectable.append(label)
-        return selectable
+        return [
+            label
+            for label, option in self.options_list.items()
+            if label not in self.readonly_options or option == value
+        ]

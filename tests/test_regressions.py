@@ -4,12 +4,9 @@ from __future__ import annotations
 
 from homeassistant.const import Platform
 
+from conftest import entity_by_path, paths
+
 from custom_components.electrolux_status.catalog_core import CATALOG_BASE, CATALOG_MODEL
-
-
-def paths(appliance) -> set[str]:
-    """Return every capability path the appliance generated an entity for."""
-    return {entity.json_path for entity in appliance.entities}
 
 
 def test_fridge_still_sets_up(fridge) -> None:
@@ -39,8 +36,7 @@ def test_model_overrides_still_apply(fridge) -> None:
 
 def test_non_hb_ui_lock_mode_stays_a_switch(washer) -> None:
     """The HB read-only override must not leak to other appliance types."""
-    ui_lock = next(entity for entity in washer.entities if entity.json_path == "uiLockMode")
-    assert ui_lock.entity_type == Platform.SWITCH
+    assert entity_by_path(washer, "uiLockMode").entity_type == Platform.SWITCH
 
 
 def test_no_hob_entities_on_other_appliances(fridge, washer) -> None:

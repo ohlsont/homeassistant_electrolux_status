@@ -1,6 +1,5 @@
 """API for Electrolux Status."""
 
-import copy
 from dataclasses import replace
 import logging
 import re
@@ -63,31 +62,23 @@ CONTAINER_INDEX_RE = re.compile(r"^([A-Za-z]+?)(\d+)/")
 # Catalog keys using the wildcard above are patterns, never real capabilities.
 CATALOG_WILDCARD = "*"
 
-# A wildcard entry's friendly_name may carry this placeholder, replaced with
-# the container's index so each zone or module gets a distinguishable name.
-CATALOG_INDEX_PLACEHOLDER = "{index}"
 
+def catalog_wildcard_key(capability: str) -> tuple[str, str] | None:
+    """Return the wildcard form of a nested capability path and its index.
 
-def catalog_wildcard_key(capability: str) -> str | None:
-    """Return the wildcard form of a nested capability path, or None.
-
-    "hobZone12/runningTime" -> "hobZone*/runningTime"
+    "hobZone12/runningTime" -> ("hobZone*/runningTime", "12")
     "userSelections/analogTemperature" -> None (no numeric container suffix)
     """
     match = CONTAINER_INDEX_RE.match(capability)
     if not match:
         return None
-    attribute = capability.split("/", 1)[1]
-    return f"{match.group(1)}{CATALOG_WILDCARD}/{attribute}"
+    container, index = match.groups()
+    return f"{container}{CATALOG_WILDCARD}/{capability[match.end() :]}", index
 
 
-def catalog_container_index(capability: str) -> str | None:
-    """Return the index of a numbered capability container, or None.
-
-    "hobZone7/runningTime" -> "7"
-    """
-    match = CONTAINER_INDEX_RE.match(capability)
-    return match.group(2) if match else None
+def is_catalog_pattern(key: str) -> bool:
+    """Return whether a catalog key is a pattern rather than a capability."""
+    return CATALOG_WILDCARD in key
 
 
 class ElectroluxLibraryEntity:
@@ -407,38 +398,38 @@ class Appliance:
     def catalog(self) -> dict[str, ElectroluxDevice]:
         """Return the defined catalog for the appliance.
 
-        Layered from most generic to most specific: the base catalog, then any
-        overrides for the reported appliance type, then any overrides for the
-        exact model. Appliance-type overrides are preferred over model ones as
-        they apply to every model of that type.
+        Applied from most generic to most specific, so the base catalog is
+        overridden by the reported appliance type, which is in turn overridden
+        by the exact model. Prefer adding to the appliance-type catalog: it
+        covers every model of that type.
         """
         # Cached for the appliance's lifetime. The appliance type does not
         # change, and caching also means a later state push that happens to
         # omit applianceInfo cannot silently switch the catalog out from
         # under entities that were already built from it.
-        if self._catalog is not None:
-            return self._catalog
+        if self._catalog is None:
+            overrides = [
+                override
+                for override in (
+                    CATALOG_APPLIANCE_TYPE.get(self.appliance_type),
+                    CATALOG_MODEL.get(self.model),
+                )
+                if override
+            ]
+            if not overrides:
+                self._catalog = CATALOG_BASE
+            else:
+                _LOGGER.debug(
+                    "Extending catalog for appliance type %s / model %s",
+                    self.appliance_type,
+                    self.model,
+                )
+                # Shallow copy: overrides replace whole entries, they never
+                # mutate one, so the base entries can safely be shared.
+                self._catalog = dict(CATALOG_BASE)
+                for override in overrides:
+                    self._catalog.update(override)
 
-        overrides = [
-            CATALOG_APPLIANCE_TYPE.get(self.appliance_type),
-            CATALOG_MODEL.get(self.model),
-        ]
-        if not any(overrides):
-            self._catalog = CATALOG_BASE
-            return self._catalog
-
-        _LOGGER.debug(
-            "Extending catalog for appliance type %s / model %s",
-            self.appliance_type,
-            self.model,
-        )
-        # Make a deep copy of the base catalog to preserve it
-        new_catalog = copy.deepcopy(CATALOG_BASE)
-        for override in overrides:
-            if override:
-                new_catalog.update(override)
-
-        self._catalog = new_catalog
         return self._catalog
 
     def get_catalog_entry(self, capability: str) -> ElectroluxDevice | None:
@@ -451,15 +442,21 @@ class Appliance:
         catalog = self.catalog
         if entry := catalog.get(capability):
             return entry
-        wildcard = catalog_wildcard_key(capability)
-        if not wildcard or not (entry := catalog.get(wildcard)):
+        if not (wildcard := catalog_wildcard_key(capability)):
+            return None
+        key, index = wildcard
+        if not (entry := catalog.get(key)):
             return None
         # A wildcard entry describes every container of its kind, so its name
-        # has to carry the index or every zone ends up with the same name.
-        index = catalog_container_index(capability)
-        if index and entry.friendly_name and CATALOG_INDEX_PLACEHOLDER in entry.friendly_name:
-            return replace(entry, friendly_name=entry.friendly_name.format(index=index))
-        return entry
+        # has to carry the index or every zone ends up with the same name. If
+        # an entry forgets the placeholder, drop back to the generated name -
+        # that already contains the container, so names stay distinct.
+        if not entry.friendly_name:
+            return entry
+        if "{index}" not in entry.friendly_name:
+            _LOGGER.debug("Catalog pattern %s has no {index} in its name, using the generated one", key)
+            return replace(entry, friendly_name=None)
+        return replace(entry, friendly_name=entry.friendly_name.format(index=index))
 
     def update_missing_entities(self) -> None:
         """Add missing entities when no capabilities returned by the API.
@@ -470,7 +467,7 @@ class Appliance:
             return
 
         for key, catalog_item in self.catalog.items():
-            if CATALOG_WILDCARD in key:
+            if is_catalog_pattern(key):
                 # Pattern entry, not a capability an appliance can report.
                 continue
             category = self.data.get_category(key)
@@ -679,9 +676,8 @@ class Appliance:
             if self.get_state(static_attribute) is None:
                 continue
             if capabilities_names and static_attribute in capabilities_names:
-                # The appliance does advertise it after all, so let the
-                # capability document drive it rather than creating a second,
-                # duplicate entity with the same unique id.
+                # Both entities would share one unique id, and HA drops the
+                # second. Let the capability document drive it.
                 _LOGGER.debug(
                     "Electrolux static_attribute %s also advertised as a capability, skipping",
                     static_attribute,

@@ -42,21 +42,29 @@ async def main() -> None:
             model_name = (appliance.get("applianceData") or {}).get("modelName", "unknown")
             print(f"== {model_name} {appliance_id}", file=sys.stderr)
 
-            bundle = {"get_appliances_list": appliance}
-            # aid is bound as a default so each lambda captures this
-            # iteration's appliance, not the loop variable.
-            for name, call in (
-                ("get_appliances_info", lambda aid=appliance_id: client.get_appliances_info([aid])),
-                ("get_appliance_state", lambda aid=appliance_id: client.get_appliance_state(aid)),
-                ("get_appliance_capabilities", lambda aid=appliance_id: client.get_appliance_capabilities(aid)),
-            ):
+            async def dump(name, coro):
+                """Await one call, recording the error instead of raising."""
                 try:
-                    bundle[name] = await call()
+                    return await coro
                 except Exception as err:  # noqa: BLE001
                     # Some appliances (robot vacuums for instance) have no
                     # capability document; keep going so the rest is usable.
-                    print(f"   {name}: {type(err).__name__}: {err}", file=sys.stderr)
-                    bundle[name] = {"error": f"{type(err).__name__}: {err}"}
+                    detail = f"{type(err).__name__}: {err}"
+                    print(f"   {name}: {detail}", file=sys.stderr)
+                    return {"error": detail}
+
+            bundle = {
+                "get_appliances_list": appliance,
+                "get_appliances_info": await dump(
+                    "get_appliances_info", client.get_appliances_info([appliance_id])
+                ),
+                "get_appliance_state": await dump(
+                    "get_appliance_state", client.get_appliance_state(appliance_id)
+                ),
+                "get_appliance_capabilities": await dump(
+                    "get_appliance_capabilities", client.get_appliance_capabilities(appliance_id)
+                ),
+            }
 
             if output_dir:
                 # modelName carries the appliance *type* (HB, WM, CR), so it

@@ -11,20 +11,10 @@ from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.const import Platform, UnitOfTime
 from homeassistant.exceptions import ServiceValidationError
 
+from conftest import entity_by_path, paths
+
 from custom_components.electrolux_status.api import catalog_wildcard_key
 from custom_components.electrolux_status.catalog_core import CATALOG_APPLIANCE_TYPE
-
-
-def entity_by_path(appliance, path: str):
-    """Return the single entity generated for a capability path."""
-    matches = [entity for entity in appliance.entities if entity.json_path == path]
-    assert len(matches) == 1, f"expected exactly one entity for {path}, got {len(matches)}"
-    return matches[0]
-
-
-def paths(appliance) -> set[str]:
-    """Return every capability path the appliance generated an entity for."""
-    return {entity.json_path for entity in appliance.entities}
 
 
 # --- appliance detection ------------------------------------------------
@@ -104,16 +94,16 @@ def test_no_fixed_zone_count_assumption(hob) -> None:
 @pytest.mark.parametrize(
     ("capability", "expected"),
     [
-        ("hobZone1/runningTime", "hobZone*/runningTime"),
-        ("hobZone12/runningTime", "hobZone*/runningTime"),
-        ("hobModule2/procookLevelRear", "hobModule*/procookLevelRear"),
+        ("hobZone1/runningTime", ("hobZone*/runningTime", "1")),
+        ("hobZone12/runningTime", ("hobZone*/runningTime", "12")),
+        ("hobModule2/procookLevelRear", ("hobModule*/procookLevelRear", "2")),
         # No numeric container suffix, so no wildcard form.
         ("userSelections/analogTemperature", None),
         ("applianceState", None),
         ("fCMiscellaneousState/tankAReserve", None),
     ],
 )
-def test_catalog_wildcard_key(capability: str, expected: str | None) -> None:
+def test_catalog_wildcard_key(capability: str, expected: tuple[str, str] | None) -> None:
     """Wildcard keys are derived only from a numbered container prefix."""
     assert catalog_wildcard_key(capability) == expected
 
@@ -158,30 +148,24 @@ def test_wildcard_keys_do_not_become_entities(hob) -> None:
 # --- values come from the device, not from guesses ----------------------
 
 
-def test_fan_speed_options_come_from_capabilities(hob) -> None:
-    """The CCE84779CB advertises six fan speeds and no drying cycle."""
-    fan_speed = entity_by_path(hob, "hobHood/hobToHoodFanSpeed")
-    assert fan_speed.entity_type == Platform.SELECT
-    assert sorted(fan_speed.options_list.values()) == [
-        "BOOST",
-        "BREEZE",
-        "OFF",
-        "STEP_1",
-        "STEP_2",
-        "STEP_3",
-    ]
-    assert "DRYING_CYCLE" not in fan_speed.options_list.values()
-
-
-def test_hood_state_options_come_from_capabilities(hob) -> None:
-    """Hood state options are read from the device."""
-    hood_state = entity_by_path(hob, "hobHood/hobToHoodState")
-    assert hood_state.entity_type == Platform.SELECT
-    assert sorted(hood_state.options_list.values()) == [
-        "AUTOMATIC",
-        "AUTO_SUSPEND",
-        "MANUAL",
-    ]
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        # Note the absence of DRYING_CYCLE, which the upstream peacock_hob
+        # fixture has and this model does not.
+        (
+            "hobHood/hobToHoodFanSpeed",
+            ["BOOST", "BREEZE", "OFF", "STEP_1", "STEP_2", "STEP_3"],
+        ),
+        ("hobHood/hobToHoodState", ["AUTOMATIC", "AUTO_SUSPEND", "MANUAL"]),
+        ("keySoundTone", ["CLICK", "NONE"]),
+    ],
+)
+def test_select_values_come_from_capabilities(hob, path: str, expected: list[str]) -> None:
+    """Selectable values are read from the device, never guessed."""
+    entity = entity_by_path(hob, path)
+    assert entity.entity_type == Platform.SELECT
+    assert sorted(entity.options_list.values()) == expected
 
 
 def test_disabled_enum_values_are_not_selectable(hob) -> None:
@@ -267,6 +251,7 @@ def test_duration_number_is_presented_in_minutes(hob) -> None:
     for writing, so declaring the unit changes the control's scale.
     """
     duration = entity_by_path(hob, "hobHood/targetDuration")
+    assert duration.entity_type == Platform.NUMBER
     assert duration.native_unit_of_measurement == UnitOfTime.MINUTES
     assert duration.native_min_value == 0
     assert duration.native_max_value == 99
@@ -274,15 +259,6 @@ def test_duration_number_is_presented_in_minutes(hob) -> None:
 
     hob.update_reported_data({"hobHood": {"targetDuration": 3600}})
     assert duration.native_value == 60
-
-
-def test_number_bounds_come_from_capabilities(hob) -> None:
-    """Numeric bounds are taken from the capability document."""
-    duration = entity_by_path(hob, "hobHood/targetDuration")
-    assert duration.entity_type == Platform.NUMBER
-    assert duration.capability["min"] == 0
-    assert duration.capability["max"] == 5940
-    assert duration.capability["step"] == 60
 
 
 # --- read-only capabilities stay read-only ------------------------------

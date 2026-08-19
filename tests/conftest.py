@@ -85,6 +85,18 @@ def build_appliance(model: str) -> Appliance:
     return appliance
 
 
+def entity_by_path(appliance: Appliance, path: str):
+    """Return the single entity generated for a capability path."""
+    matches = [entity for entity in appliance.entities if entity.json_path == path]
+    assert len(matches) == 1, f"expected exactly one entity for {path}, got {len(matches)}"
+    return matches[0]
+
+
+def paths(appliance: Appliance) -> set[str]:
+    """Return every capability path the appliance generated an entity for."""
+    return {entity.json_path for entity in appliance.entities}
+
+
 @pytest.fixture
 def hob() -> Appliance:
     """Return the AEG CCE84779CB induction hob (applianceType HB)."""
