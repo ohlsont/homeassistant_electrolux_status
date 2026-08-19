@@ -667,19 +667,35 @@ class Appliance:
             # not required by each device type (fridge, dryer, vacumn etc are all different)
             _LOGGER.warning("Electrolux API returned no capability definition")
 
-        # Add static attribute
-        # these are attributes that are not in the capability entry
-        # but are returned by the api independantly
+        # For each capability src
+        if capabilities_names:
+            for capability in capabilities_names:
+                if entity := self.get_entity(capability):
+                    entities.extend(entity)
+                else:
+                    _LOGGER.debug("Could not create entity for capability %s", capability)
+
+        # Add static attributes: attributes the API reports but does not
+        # advertise as capabilities.
+        #
+        # Done after the capability pass and keyed on what that pass actually
+        # produced, not on whether the name appears in the capability document.
+        # An attribute can be advertised and still yield no entity - when the
+        # walker cannot classify its type - and it would then be lost if this
+        # skipped on the name alone. Where the capability pass did build one,
+        # skipping is required: the two would share a unique id.
+        built = {(entity.entity_attr, entity.entity_source) for entity in entities}
         for static_attribute in STATIC_ATTRIBUTES:
             _LOGGER.debug("Electrolux static_attribute %s", static_attribute)
             # attr not found in state, next attr
             if self.get_state(static_attribute) is None:
                 continue
-            if capabilities_names and static_attribute in capabilities_names:
-                # Both entities would share one unique id, and HA drops the
-                # second. Let the capability document drive it.
+            if (
+                self.data.get_entity_attr(static_attribute),
+                self.data.get_category(static_attribute),
+            ) in built:
                 _LOGGER.debug(
-                    "Electrolux static_attribute %s also advertised as a capability, skipping",
+                    "Electrolux static_attribute %s already built from the capability document",
                     static_attribute,
                 )
                 continue
@@ -696,14 +712,6 @@ class Appliance:
                 capabilities[keys[-1]] = catalog_item.capability_info
                 _LOGGER.debug("Electrolux adding static_attribute %s", static_attribute)
                 entities.extend(entity)
-
-        # For each capability src
-        if capabilities_names:
-            for capability in capabilities_names:
-                if entity := self.get_entity(capability):
-                    entities.extend(entity)
-                else:
-                    _LOGGER.debug("Could not create entity for capability %s", capability)
 
         # Setup each found entity
         self.entities = entities

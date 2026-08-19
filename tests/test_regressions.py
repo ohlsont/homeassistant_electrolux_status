@@ -61,3 +61,40 @@ def test_static_attributes_do_not_duplicate_capabilities(fridge, washer, hob) ->
     for appliance in (fridge, washer, hob):
         unique_ids = [entity.unique_id for entity in appliance.entities]
         assert len(unique_ids) == len(set(unique_ids))
+
+
+def test_unclassifiable_capability_still_yields_a_static_entity(fridge) -> None:
+    """A static attribute is kept when the capability pass produces nothing.
+
+    sources_list only requires access+type, but get_entity_type cannot classify
+    every such shape. Skipping a static attribute merely because the name
+    appears in the capability document would drop the entity entirely.
+    """
+    from custom_components.electrolux_status.api import Appliance, Appliances, ElectroluxLibraryEntity
+
+    data = fridge.data
+    # A well-formed-looking capability the walker cannot classify.
+    data.capabilities["applianceMode"] = {"access": "readwrite", "type": "string"}
+
+    rebuilt = Appliance(
+        coordinator=fridge.coordinator,
+        name=fridge.name,
+        pnc_id=fridge.pnc_id,
+        brand=fridge.brand,
+        model=fridge.model,
+        state=fridge.state,
+    )
+    fridge.coordinator.data["appliances"] = Appliances({fridge.pnc_id: rebuilt})
+    rebuilt.setup(
+        ElectroluxLibraryEntity(
+            name=data.name,
+            status=data.status,
+            state=fridge.state,
+            appliance_info=data.appliance_info,
+            capabilities=data.capabilities,
+        )
+    )
+
+    assert "applianceMode" in paths(rebuilt)
+    unique_ids = [entity.unique_id for entity in rebuilt.entities]
+    assert len(unique_ids) == len(set(unique_ids))

@@ -208,9 +208,10 @@ class ElectroluxSelect(ElectroluxEntity, SelectEntity):
         """
         if not self.readonly_options:
             return list(self.options_list)
-        value = self.reported_value()
-        return [
-            label
-            for label, option in self.options_list.items()
-            if label not in self.readonly_options or option == value
-        ]
+        # Compare against current_option rather than the reported value, so the
+        # two cannot disagree. current_option falls back to the last known
+        # label when a payload omits the attribute, and a disabled value has to
+        # survive that fallback too - otherwise the entity renders as unknown
+        # the first time an update arrives without it.
+        current = self.current_option
+        return [label for label in self.options_list if label not in self.readonly_options or label == current]

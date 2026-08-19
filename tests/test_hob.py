@@ -195,6 +195,24 @@ def test_disabled_value_stays_visible_while_reported(hob) -> None:
     assert "Auto Suspend" not in hood_state.options
 
 
+def test_disabled_value_survives_a_payload_that_omits_it(hob) -> None:
+    """A disabled value must stay visible across a partial update.
+
+    Pushes carry only what changed, so an update can omit the whole container.
+    current_option then falls back to the last known label; if options stopped
+    listing that label, HA would render the entity as unknown.
+    """
+    hood_state = entity_by_path(hob, "hobHood/hobToHoodState")
+    hob.update_reported_data({"hobHood": {"hobToHoodState": "AUTO_SUSPEND"}})
+    assert hood_state.current_option == "Auto Suspend"
+
+    # An update that says nothing about the hood at all.
+    hob.reported_state.pop("hobHood")
+
+    assert hood_state.current_option == "Auto Suspend"
+    assert "Auto Suspend" in hood_state.options, "HA would render this as unknown"
+
+
 def test_disabled_value_cannot_be_sent(hob) -> None:
     """Selecting a disabled value is refused loudly, not silently dropped."""
     hood_state = entity_by_path(hob, "hobHood/hobToHoodState")

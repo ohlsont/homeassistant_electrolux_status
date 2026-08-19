@@ -207,13 +207,13 @@ HB: dict[str, ElectroluxDevice] = {
         entity_icon="mdi:square-rounded",
     ),
     "hobModule*/procookLevelFront": ElectroluxDevice(
-        friendly_name="Module {index} ProCook level front",
+        friendly_name="Module {index} Procook level front",
         # Read-only: see MODULE NOTE.
         entity_icon="mdi:stove",
         entity_platform=Platform.SENSOR,
     ),
     "hobModule*/procookLevelRear": ElectroluxDevice(
-        friendly_name="Module {index} ProCook level rear",
+        friendly_name="Module {index} Procook level rear",
         entity_icon="mdi:stove",
         entity_platform=Platform.SENSOR,
     ),
